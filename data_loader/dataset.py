@@ -12,53 +12,55 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils import data
 
-from data_loader.data_pre import *
-
-
-def color_map():
-    """
-    color map:
-    Background(dark), Cortical gray matter(gray), Basal ganglia(green),
-    White matter(white), White matter lesions(Maroon),
-    Cerebrospinal(olive), Ventricles(light blue), Cerebellum(red),
-    Brain stem(teal), Infarction(purple), Other(cyan)
-    """
-    return np.asarray([[0, 0, 0], [128, 128, 128], [0, 255, 0],
-                             [255, 255, 255], [128, 0, 0],
-                             [128, 128, 0], [255, 255, 0], [255, 0, 0],
-                             [0, 128, 128], [128, 0, 128], [0, 255, 255]]).astype(np.uint8)
+from data_loader.pre_process import *
 
 
 class MRBrainS18(data.Dataset):
-    def __init__(self, n_classes=11, root='data/training', val_num=5, is_val=False, is_transform=False, is_flip=False,
-                 is_rotate=False, n_angles=5, is_crop=False, is_histeq=False, n_stack=5):
+    def __init__(self, root='data/training', val=5, train=True, transform=None):
         self.root = root
-        self.is_val = is_val
-        self.n_classes = n_classes
-        self.angles = np.zeros(1)
+        self.val = val
+        self.train = train
+        self.transform = transform
 
-        self.color = color_map()
-        self.label_test = [0, 2, 2, 3, 3, 1, 1, 0, 0]
+    def __getitem__(self, index):
+        train_path, val_path = train_val_split(self.root, self.val)
+        if self.train:
+            patient, segmentation = load_data(train_path[index, :3]), load_segm(train_path[index, 3])
+        else:
+            patient, segmentation = load_data(val_path[index, :3]), load_segm(val_path[index, 3])
+
+
+
         self.train_val_split(root, val_num)
-
 
         if is_val == False:
             print('training...')
-            T1 = [to_uint8(read_vol(path)) for path in self.train_T1_path]
-            IR = [IR_to_unit8(read_vol(path)) for path in self.train_IR_path]
-            T2 = [to_uint8(read_vol(path)) for path in self.train_T2_path]
-            label = [read_vol(path) for path in self.train_label_path]
+            data = [series(path, load_data) for path in self.train_path]
 
-            if is_flip:
-                print('    flipping...')
-                T1 = flip(T1)
-                IR = flip(IR)
-                T2 = flip(T2)
-                label = flip(label)
+            data = data_array(data)
+            data = [series(patient, emphasize_edge) for patient in data]
+            data = [series(patient, adaptive_hist) for patient in data]
 
-            if is_histeq:
-                print('    histogram equalizing...')
-                T1 = [equal_hist(vol) for vol in T1]
+            data = array_data(data)
+            data = series(data, threshold_based_crop)
+            aug_data = [series(patient, augment_images_intensity) for patient in data]
+            aug_data = np.array(series(aug_data, data_array))
+            aug_data = aug_data.reshape(aug_data.shape[0], -1, aug_data.shape[-3], aug_data.shape[-2], aug_data.shape[-1])
+            data = np.concatenate([data_array(data), aug_data], 1)
+            parts = np.array([6,2,2])
+            for i, patient in enumerate(data):
+                patient_data = np.array(series(patient, partition, parts))
+
+
+
+
+
+
+            data.append([series(patient, flip) for patient in data])
+
+
+
+
 
             print('    getting stacked...')
             T1_stacks = [get_stacked(vol, n_stack) for vol in T1]
@@ -173,25 +175,6 @@ class MRBrainS18(data.Dataset):
         return outputs
 
 
-    def train_val_split(self, root, val_num):
-        # data paths
-        names = os.listdir(root)
-        T1_path = [root + name + '/pre/reg_T1.nii.gz' for name in names]
-        IR_path = [root + name + '/pre/IR.nii.gz' for name in names]
-        T2_path = [root + name + '/pre/FLAIR.nii.gz' for name in names]
-        label_path = [root + name + '/segm.nii.gz' for name in names]
-
-        # val data
-        self.val_T1_path = T1_path[val_num - 1]
-        self.val_IR_path = IR_path[val_num - 1]
-        self.val_T2_path = T2_path[val_num - 1]
-        self.val_label_path = label_path[val_num - 1]
-
-        # train data
-        self.train_T1_path = [item for item in T1_path if item not in self.val_T1_path]
-        self.train_IR_path = [item for item in IR_path if item not in self.val_IR_path]
-        self.train_T2_path = [item for item in T2_path if item not in self.val_T2_path]
-        self.train_label_path = [item for item in label_path if item not in self.val_label_path]
 
 
 
